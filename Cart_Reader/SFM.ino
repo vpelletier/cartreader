@@ -560,24 +560,18 @@ void setup_SFM() {
   DDRH |= (1 << 1);
   //PORTH &= ~(1 << 1);
 
-  // Adafruit Clock Generator
-  initializeClockOffset();
-
-  if (i2c_found) {
-    clockgen.set_pll(SI5351_PLL_FIXED, SI5351_PLLA);
-    clockgen.set_pll(SI5351_PLL_FIXED, SI5351_PLLB);
-    clockgen.set_freq(2147727200ULL, SI5351_CLK0);
-
-    // start outputting master clock
-    clockgen.output_enable(SI5351_CLK1, 0);
-    clockgen.output_enable(SI5351_CLK2, 0);
-    clockgen.output_enable(SI5351_CLK0, 1);
-  }
 #ifdef clockgen_installed
-  else {
-    display_Clear();
-    print_FatalError(F("Clock Generator not found"));
-  }
+  // Adafruit Clock Generator
+  Si5351 clockgen = getClockGen();
+
+  clockgen.set_pll(SI5351_PLL_FIXED, SI5351_PLLA);
+  clockgen.set_pll(SI5351_PLL_FIXED, SI5351_PLLB);
+  clockgen.set_freq(2147727200ULL, SI5351_CLK0);
+
+  // start outputting master clock
+  clockgen.output_enable(SI5351_CLK1, 0);
+  clockgen.output_enable(SI5351_CLK2, 0);
+  clockgen.output_enable(SI5351_CLK0, 1);
 #endif
 
   // Wait until all is stable

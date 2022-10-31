@@ -268,8 +268,6 @@ U8G2_SSD1306_128X64_NONAME_F_HW_I2C display(U8G2_R0, /* reset=*/U8X8_PIN_NONE);
 
 // Adafruit Clock Generator
 #include <si5351.h>
-Si5351 clockgen;
-bool i2c_found;
 
 // RTC Library
 #ifdef RTC_installed
@@ -1491,34 +1489,29 @@ String RTCStamp() {
 /******************************************
    Clockgen Calibration
  *****************************************/
+
+#if defined(clockgen_installed)
+
 #ifdef clockgen_calibration
-int32_t cal_factor = 0;
-int32_t old_cal = 0;
-int32_t cal_offset = 100;
+const char clock_adjustment_fmt[] PROGMEM = "% 11li";
 
 void clkcal() {
+  int32_t cal_factor;
+  int32_t old_cal;
+  int32_t cal_offset = 100;
+  char buf[12];
+  Si5351 clockgen = getClockGen();
+
   // Adafruit Clock Generator
-  // last number is the clock correction factor which is custom for each clock generator
-  cal_factor = readClockOffset();
 
   display.clearDisplay();
   display.setCursor(0, 0);
   display.print("Read correction: ");
   display.println(cal_factor);
   display.updateDisplay();
+  cal_factor = loadClockFactor();
+  old_cal = cal_factor;
   delay(500);
-
-  if (cal_factor > INT32_MIN) {
-    i2c_found = clockgen.init(SI5351_CRYSTAL_LOAD_8PF, 0, cal_factor);
-  } else {
-    i2c_found = clockgen.init(SI5351_CRYSTAL_LOAD_8PF, 0, 0);
-    cal_factor = 0;
-  }
-
-  if (!i2c_found) {
-    display_Clear();
-    print_FatalError(F("Clock Generator not found"));
-  }
 
   //clockgen.set_correction(cal_factor, SI5351_PLL_INPUT_XO);
   clockgen.set_pll(SI5351_PLL_FIXED, SI5351_PLLA);
@@ -1568,37 +1561,51 @@ void clkcal() {
         print_Msg(count);
         println_Msg(F("Hz"));
         print_Msg(F("Correction:"));
-        print_right(cal_factor);
+        snprintf_P(buf, sizeof(buf), clock_adjustment_fmt, cal_factor);
+        print_Msg(buf);
         print_Msg(F("Adjustment:"));
-        print_right(cal_offset);
-#ifdef enable_Button2
+        snprintf_P(buf, sizeof(buf), clock_adjustment_fmt, cal_offset);
+        print_Msg(buf);
+#if defined(enable_Button2)
         println_Msg(F("(Hold button to save)"));
         println_Msg(F(""));
         println_Msg(F("Decrease     Increase"));
-#else
-#ifdef enable_rotary
+#elif defined(enable_rotary)
         println_Msg(F("Rotate to adjust"));
 #else
         println_Msg(F("Click/dbl to adjust"));
 #endif
-#endif
         display_Update();
       }
-#ifdef enable_Button2
+#if defined(enable_Button2)
       // get input button
       int a = checkButton1();
       int b = checkButton2();
+#else
+      //Handle inputs for either rotary encoder or single button interface.
+      int a = checkButton();
+#endif
 
+#if defined(enable_Button2)
       // if the cart readers input button is pressed shortly
       if (a == 1) {
+#else
+      if (a == 2) {  //counterclockwise rotation or double click
+#endif
         old_cal = cal_factor;
         cal_factor -= cal_offset;
       }
+
+#if defined(enable_Button2)
       if (b == 1) {
+#else
+      if (a == 1) {  //clockwise rotation or single click
+#endif
         old_cal = cal_factor;
         cal_factor += cal_offset;
       }
 
+#if defined(enable_Button2)
       // if the cart readers input buttons is double clicked
       if (a == 2) {
         cal_offset /= 10ULL;
@@ -1607,182 +1614,80 @@ void clkcal() {
         }
       }
       if (b == 2) {
-        cal_offset *= 10ULL;
-        if (cal_offset > 100000000ULL) {
-          cal_offset = 1;
-        }
-      }
-
-      // if the cart readers input button is pressed long
-      if (a == 3) {
-        savetofile();
-      }
-      if (b == 3) {
-        savetofile();
-      }
 #else
-      //Handle inputs for either rotary encoder or single button interface.
-      int a = checkButton();
-
-      if (a == 1) {  //clockwise rotation or single click
-        old_cal = cal_factor;
-        cal_factor += cal_offset;
-      }
-
-      if (a == 2) {  //counterclockwise rotation or double click
-        old_cal = cal_factor;
-        cal_factor -= cal_offset;
-      }
-
       if (a == 3) {  //button short hold
+#endif
         cal_offset *= 10ULL;
         if (cal_offset > 100000000ULL) {
           cal_offset = 1;
         }
       }
 
+#if defined(enable_Button2)
+      // if the cart readers input button is pressed long
+      if (a == 3 || b == 3) {
+#else
       if (a == 4) {  //button long hold
-        savetofile();
-      }
 #endif
+        display_Clear();
+        println_Msg(F("Saving..."));
+        println_Msg(cal_factor);
+        display_Update();
+        saveClockFactor(cal_factor);
+        print_STR(done_STR, 1);
+        display_Update();
+        delay(1000);
+        resetArduino();
+      }
     }
   }
 }
+#endif // defined(clockgen_calibration)
 
-void print_right(int32_t number) {
-  int32_t abs_number = number;
-  if (abs_number < 0)
-    abs_number *= -1;
-  else
-    print_Msg(F(" "));
-
-  if (abs_number == 0)
-    abs_number = 1;
-  while (abs_number < 100000000ULL) {
-    print_Msg(F(" "));
-    abs_number *= 10ULL;
-  }
-  println_Msg(number);
-}
-
-void savetofile() {
-  display_Clear();
-  println_Msg(F("Saving..."));
-  println_Msg(cal_factor);
-  display_Update();
-  delay(2000);
+void saveClockFactor(uint32_t cal_factor) {
+  SdFile myFile;
 
   if (!myFile.open("/snes_clk.txt", O_WRITE | O_CREAT | O_TRUNC)) {
     print_FatalError(sd_error_STR);
   }
-  // Write calibration factor to file
   myFile.print(cal_factor);
-
-  // Close the file:
   myFile.close();
-  print_STR(done_STR, 1);
-  display_Update();
-  delay(1000);
-  resetArduino();
 }
-#endif
 
-#ifdef clockgen_calibration
-int32_t atoi32_signed(const char* input_string) {
-  if (input_string == NULL) {
+int32_t loadClockFactor() {
+  FsFile clock_file;
+  char clock_buf[12];
+  const char *filename = "/snes_clk.txt";
+  int read_bytes;
+
+  if (!clock_file.open(filename, O_READ)) {
+    saveClockFactor(0);
     return 0;
   }
-
-  int int_sign = 1;
-  int i = 0;
-
-  if (input_string[0] == '-') {
-    int_sign = -1;
-    i = 1;
-  }
-
-  int32_t return_val = 0;
-
-  while (input_string[i] != '\0') {
-    if (input_string[i] >= '0' && input_string[i] <= '9') {
-      return_val = (return_val * 10) + (input_string[i] - '0');
-    } else if (input_string[i] != '\0') {
-      return 0;
-    }
-
-    i++;
-  }
-
-  return_val = return_val * int_sign;
-
-  return return_val;
-}
-
-int32_t readClockOffset() {
-  FsFile clock_file;
-  char* clock_buf;
-  int16_t i;
-  int32_t clock_offset;
-
-  if (!clock_file.open("/snes_clk.txt", O_READ)) {
-    return INT32_MIN;
-  }
-
-  clock_buf = (char*)malloc(12 * sizeof(char));
-  i = clock_file.read(clock_buf, 11);
+  read_bytes = clock_file.read(clock_buf, sizeof(clock_buf) - 1);
   clock_file.close();
-  if (i == -1) {
-    free(clock_buf);
-    return INT32_MIN;
-  } else if ((i == 11) && (clock_buf[0] != '-')) {
-    free(clock_buf);
-    return INT32_MIN;
-  } else {
-    clock_buf[i] = 0;
-  }
 
-  for (i = 0; i < 12; i++) {
-    if (clock_buf[i] != '-' && clock_buf[i] < '0' && clock_buf[i] > '9') {
-      if (i == 0) {
-        free(clock_buf);
-        return INT32_MIN;
-      } else if ((i == 1) && (clock_buf[0] == '-')) {
-        free(clock_buf);
-        return INT32_MIN;
-      } else {
-        clock_buf[i] = 0;
-      }
-    }
-  }
-
-  clock_offset = atoi32_signed(clock_buf);
-  free(clock_buf);
-
-  return clock_offset;
+  if (read_bytes == -1)
+    return 0;
+  clock_buf[read_bytes] = 0;
+  return atol(clock_buf);
 }
-#endif
 
-int32_t initializeClockOffset() {
-#ifdef clockgen_calibration
-  FsFile clock_file;
-  const char zero_char_arr[] = { '0' };
-  int32_t clock_offset = readClockOffset();
-  if (clock_offset > INT32_MIN) {
-    i2c_found = clockgen.init(SI5351_CRYSTAL_LOAD_8PF, 0, clock_offset);
-  } else {
-    i2c_found = clockgen.init(SI5351_CRYSTAL_LOAD_8PF, 0, 0);
-    if (clock_file.open("/snes_clk.txt", O_WRITE | O_CREAT | O_TRUNC)) {
-      clock_file.write(zero_char_arr, 1);
-      clock_file.close();
-    }
+Si5351 getClockGen() {
+  Si5351 clockgen;
+  // Si5351 is a large object (137 bytes). This is a lot to have permanently
+  // allocated, considering how rarely the PLL needs to be reconfigured.
+  // So instead of storing it in a global, construct it when needed.
+  // Unfortunately, because of the way Si5351 is implemented, this resets
+  // the chip. Still, I think the wait for PLLs to be resynchronised is worth
+  // the global ram savings.
+  if (!clockgen.init(SI5351_CRYSTAL_LOAD_8PF, 0, loadClockFactor())) {
+    display_Clear();
+    print_FatalError(F("Clock Generator not found"));
   }
-  return clock_offset;
-#else
-  // last number is the clock correction factor which is custom for each clock generator
-  i2c_found = clockgen.init(SI5351_CRYSTAL_LOAD_8PF, 0, 0);
-  return 0;
-#endif
+  return clockgen;
 }
+#endif // defined(clockgen_installed)
 
 /******************************************
    Setup

@@ -408,25 +408,11 @@ void setup_N64_Cart() {
 
 #ifdef clockgen_installed
   // Adafruit Clock Generator
-
-  initializeClockOffset();
-
-  if (!i2c_found) {
-    display_Clear();
-    print_FatalError(F("Clock Generator not found"));
-  }
-
+  Si5351 clockgen = getClockGen();
   // Set Eeprom clock to 2Mhz
   clockgen.set_freq(200000000ULL, SI5351_CLK1);
-
   // Start outputting Eeprom clock
   clockgen.output_enable(SI5351_CLK1, 1);  // Eeprom clock
-
-#else
-  // Set Eeprom Clock Pin(PH1) to Output
-  DDRH |= (1 << 1);
-  // Output a high signal
-  PORTH |= (1 << 1);
 #endif
 
   // Set Eeprom Data Pin(PH4) to Input
